@@ -2,8 +2,6 @@
 
 Lightweight AI cost observability for Node.js and TypeScript. Know exactly what your AI features cost.
 
-Track every LLM call by feature -- chatbot, summarizer, search -- with two lines of code. No agents, no bloat.
-
 ## Installation
 
 ```bash
@@ -79,6 +77,85 @@ const response = await anthropic.messages.create({
 
 console.log(response.content[0].text);
 ```
+
+### Google Gemini
+
+```typescript
+import { init } from "agentracer";
+import { gemini } from "agentracer/gemini";
+
+init({
+  trackerApiKey: process.env.AGENTRACER_API_KEY!,
+  projectId: process.env.AGENTRACER_PROJECT_ID!,
+});
+
+const model = gemini.getGenerativeModel({ model: "gemini-1.5-pro" });
+
+const result = await model.generateContent({
+  contents: [{ role: "user", parts: [{ text: "Hello!" }] }],
+  feature_tag: "content-gen", // optional: tag this call
+});
+
+console.log(result.response.text());
+```
+
+## Streaming
+
+All providers support streaming. Token usage is automatically tracked after the stream completes.
+
+### OpenAI Streaming
+
+```typescript
+import { openai } from "agentracer/openai";
+
+const stream = await openai.chat.completions.create({
+  model: "gpt-4o",
+  messages: [{ role: "user", content: "Write a poem" }],
+  stream: true,
+  feature_tag: "poet",
+});
+
+for await (const chunk of stream) {
+  process.stdout.write(chunk.choices[0]?.delta?.content ?? "");
+}
+// Telemetry is sent automatically after the stream ends
+```
+
+### Anthropic Streaming
+
+```typescript
+import { anthropic } from "agentracer/anthropic";
+
+const stream = await anthropic.messages.create({
+  model: "claude-sonnet-4-20250514",
+  max_tokens: 1024,
+  messages: [{ role: "user", content: "Write a poem" }],
+  stream: true,
+  feature_tag: "poet",
+});
+
+for await (const event of stream) {
+  if (event.type === "content_block_delta") {
+    process.stdout.write(event.delta.text ?? "");
+  }
+}
+```
+
+### Gemini Streaming
+
+```typescript
+import { gemini } from "agentracer/gemini";
+
+const model = gemini.getGenerativeModel({ model: "gemini-1.5-pro" });
+
+const { stream } = await model.generateContentStream("Write a poem");
+
+for await (const chunk of stream) {
+  process.stdout.write(chunk.text());
+}
+```
+
+> Streaming works transparently -- usage is captured from the final chunk (OpenAI), SSE events (Anthropic), or chunk metadata (Gemini), then sent as a single telemetry event after the stream finishes.
 
 ## Feature Tags
 
