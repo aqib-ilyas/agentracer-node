@@ -1,0 +1,85 @@
+{
+  "name": "agentracer",
+  "version": "0.1.0",
+  "description": "Lightweight AI cost observability. Know exactly what your AI features cost.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    },
+    "./openai": {
+      "types": "./dist/openai.d.ts",
+      "import": "./dist/openai.mjs",
+      "require": "./dist/openai.js"
+    },
+    "./anthropic": {
+      "types": "./dist/anthropic.d.ts",
+      "import": "./dist/anthropic.mjs",
+      "require": "./dist/anthropic.js"
+    },
+    "./gemini": {
+      "types": "./dist/gemini.d.ts",
+      "import": "./dist/gemini.mjs",
+      "require": "./dist/gemini.js"
+    }
+  },
+  "scripts": {
+    "build": "tsup src/index.ts src/openai.ts src/anthropic.ts src/gemini.ts --format cjs,esm --dts",
+    "dev": "tsup src/index.ts src/openai.ts src/anthropic.ts src/gemini.ts --format cjs,esm --dts --watch",
+    "test": "vitest run",
+    "prepublishOnly": "npm run build && npm test"
+  },
+  "keywords": [
+    "ai",
+    "observability",
+    "llm",
+    "cost-tracking",
+    "openai",
+    "anthropic",
+    "gemini"
+  ],
+  "author": "Agentracer <hello@agentracer.dev>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/aqib-ilyas/agentracer-node"
+  },
+  "homepage": "https://agentracer.dev",
+  "bugs": {
+    "url": "https://github.com/aqib-ilyas/agentracer-node/issues"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.3.2",
+    "tsup": "^8.0.0",
+    "typescript": "^5.3.0",
+    "vitest": "^4.0.18"
+  },
+  "peerDependencies": {
+    "@anthropic-ai/sdk": ">=0.18.0",
+    "@google/generative-ai": ">=0.1.0",
+    "openai": ">=4.0.0"
+  },
+  "peerDependenciesMeta": {
+    "openai": {
+      "optional": true
+    },
+    "@anthropic-ai/sdk": {
+      "optional": true
+    },
+    "@google/generative-ai": {
+      "optional": true
+    }
+  }
+}
