@@ -1,6 +1,6 @@
 # agentracer
 
-Lightweight AI cost observability for Node.js and TypeScript. Know exactly what your AI features cost.
+Lightweight AI incident detection for Node.js and TypeScript. Catch cost spikes, latency anomalies, and prompt bloat before they hit your users.
 
 ## Installation
 
