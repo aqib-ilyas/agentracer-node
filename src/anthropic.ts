@@ -1,8 +1,12 @@
-import { getConfig, sendTelemetry, featureTagStorage } from "./index";
+import { getConfig, track, featureTagStorage } from "./index";
 
 let _clientInstance: any = null;
 
-function getClient() {
+function getClient(opts?: any) {
+  if (opts) {
+    const Anthropic = require("@anthropic-ai/sdk").default || require("@anthropic-ai/sdk");
+    return new Anthropic(opts);
+  }
   if (!_clientInstance) {
     const Anthropic = require("@anthropic-ai/sdk").default || require("@anthropic-ai/sdk");
     _clientInstance = new Anthropic();
@@ -34,56 +38,86 @@ async function* wrapAnthropicStream(
     yield event;
   }
 
-  sendTelemetry({
-    project_id: getConfig().projectId,
-    provider: "anthropic",
+  track({
     model,
-    feature_tag: featureTag,
-    input_tokens: inputTokens,
-    output_tokens: outputTokens,
-    latency_ms: Date.now() - start,
-    environment: getConfig().environment,
+    inputTokens,
+    outputTokens,
+    latencyMs: Date.now() - start,
+    featureTag,
+    provider: "anthropic",
   }).catch(() => {});
 }
 
-export const anthropic = new Proxy({} as any, {
-  get(_, prop) {
-    if (prop === "messages") {
-      return {
-        create: async (params: any) => {
-          const featureTag =
-            params.feature_tag ??
-            featureTagStorage.getStore() ??
-            "unknown";
+function createAnthropicProxy(clientGetter: () => any) {
+  return new Proxy({} as any, {
+    get(_, prop) {
+      if (prop === "messages") {
+        return {
+          create: async (params: any) => {
+            const featureTag =
+              params.feature_tag ??
+              featureTagStorage.getStore() ??
+              "unknown";
 
-          const { feature_tag, ...cleanParams } = params;
+            const { feature_tag, ...cleanParams } = params;
 
-          const start = Date.now();
-          const client = getClient();
+            const start = Date.now();
+            const client = clientGetter();
 
-          if (cleanParams.stream) {
-            const stream = await client.messages.create(cleanParams);
-            return wrapAnthropicStream(stream, params.model, featureTag, start);
-          }
+            if (cleanParams.stream) {
+              const stream = await client.messages.create(cleanParams);
+              return wrapAnthropicStream(stream, params.model, featureTag, start);
+            }
 
-          const response = await client.messages.create(cleanParams);
+            let response: any;
+            try {
+              response = await client.messages.create(cleanParams);
+            } catch (err: any) {
+              track({
+                model: params.model,
+                inputTokens: 0,
+                outputTokens: 0,
+                latencyMs: Date.now() - start,
+                featureTag,
+                provider: "anthropic",
+                success: false,
+                errorType: err?.constructor?.name ?? "Error",
+              }).catch(() => {});
+              throw err;
+            }
 
-          sendTelemetry({
-            project_id: getConfig().projectId,
-            provider: "anthropic",
-            model: params.model,
-            feature_tag: featureTag,
-            input_tokens: response.usage?.input_tokens ?? 0,
-            output_tokens: response.usage?.output_tokens ?? 0,
-            latency_ms: Date.now() - start,
-            environment: getConfig().environment,
-          }).catch(() => {});
+            track({
+              model: params.model,
+              inputTokens: response.usage?.input_tokens ?? 0,
+              outputTokens: response.usage?.output_tokens ?? 0,
+              cachedTokens: response.usage?.cache_read_input_tokens ?? 0,
+              latencyMs: Date.now() - start,
+              featureTag,
+              provider: "anthropic",
+            }).catch(() => {});
 
-          return response;
-        },
-      };
-    }
+            return response;
+          },
+        };
+      }
 
-    return getClient()[prop];
-  },
-});
+      return clientGetter()[prop];
+    },
+  });
+}
+
+export class TrackedAnthropic {
+  private _proxy: any;
+
+  constructor(options?: any) {
+    const Anthropic = require("@anthropic-ai/sdk").default || require("@anthropic-ai/sdk");
+    const client = new Anthropic(options);
+    this._proxy = createAnthropicProxy(() => client);
+  }
+
+  get messages() {
+    return this._proxy.messages;
+  }
+}
+
+export const anthropic = createAnthropicProxy(() => getClient());

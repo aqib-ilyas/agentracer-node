@@ -1,11 +1,14 @@
-import { getConfig, sendTelemetry, featureTagStorage } from "./index";
+import { getConfig, track, featureTagStorage } from "./index";
 
 let _clientInstance: any = null;
 
-function getClient() {
+function getClient(opts?: { apiKey?: string }) {
+  if (opts?.apiKey) {
+    const { GoogleGenerativeAI } = require("@google/generative-ai");
+    return new GoogleGenerativeAI(opts.apiKey);
+  }
   if (!_clientInstance) {
-    const { GoogleGenerativeAI } =
-      require("@google/generative-ai");
+    const { GoogleGenerativeAI } = require("@google/generative-ai");
     const apiKey =
       process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY || "";
     _clientInstance = new GoogleGenerativeAI(apiKey);
@@ -49,15 +52,13 @@ async function* wrapGeminiStream(
     yield chunk;
   }
 
-  sendTelemetry({
-    project_id: getConfig().projectId,
-    provider: "gemini",
+  track({
     model: modelName,
-    feature_tag: featureTag,
-    input_tokens: inputTokens,
-    output_tokens: outputTokens,
-    latency_ms: Date.now() - start,
-    environment: getConfig().environment,
+    inputTokens,
+    outputTokens,
+    latencyMs: Date.now() - start,
+    featureTag,
+    provider: "gemini",
   }).catch(() => {});
 }
 
@@ -69,19 +70,33 @@ function createTrackedModel(model: any, modelName: string) {
           const [featureTag, cleanParams] = extractFeatureTag(params);
 
           const start = Date.now();
-          const result = await target.generateContent(cleanParams, ...rest);
+          let result: any;
+          try {
+            result = await target.generateContent(cleanParams, ...rest);
+          } catch (err: any) {
+            track({
+              model: modelName,
+              inputTokens: 0,
+              outputTokens: 0,
+              latencyMs: Date.now() - start,
+              featureTag,
+              provider: "gemini",
+              success: false,
+              errorType: err?.constructor?.name ?? "Error",
+            }).catch(() => {});
+            throw err;
+          }
 
           try {
             const usage = result.response?.usageMetadata;
-            sendTelemetry({
-              project_id: getConfig().projectId,
-              provider: "gemini",
+            track({
               model: modelName,
-              feature_tag: featureTag,
-              input_tokens: usage?.promptTokenCount ?? 0,
-              output_tokens: usage?.candidatesTokenCount ?? 0,
-              latency_ms: Date.now() - start,
-              environment: getConfig().environment,
+              inputTokens: usage?.promptTokenCount ?? 0,
+              outputTokens: usage?.candidatesTokenCount ?? 0,
+              cachedTokens: usage?.cachedContentTokenCount ?? 0,
+              latencyMs: Date.now() - start,
+              featureTag,
+              provider: "gemini",
             }).catch(() => {});
           } catch {
             // never block the response

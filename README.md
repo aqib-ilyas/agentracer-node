@@ -1,6 +1,6 @@
 # agentracer
 
-Lightweight AI incident detection for Node.js and TypeScript. Catch cost spikes, latency anomalies, and prompt bloat before they hit your users.
+Lightweight AI observability for Node.js and TypeScript. Track costs, latency, and token usage across OpenAI, Anthropic, and Gemini with a single line change.
 
 ## Installation
 
@@ -47,7 +47,6 @@ init({
   projectId: process.env.AGENTRACER_PROJECT_ID!,
 });
 
-// Use exactly like the OpenAI SDK -- same params, same response
 const response = await openai.chat.completions.create({
   model: "gpt-4o",
   messages: [{ role: "user", content: "Hello!" }],
@@ -97,6 +96,56 @@ const result = await model.generateContent({
 });
 
 console.log(result.response.text());
+```
+
+## Custom Client Configuration
+
+If you need to pass custom options to the underlying SDK (API key, base URL, organization, etc.), use the `Tracked*` classes instead of the default proxy exports:
+
+### TrackedOpenAI
+
+```typescript
+import { init } from "agentracer";
+import { TrackedOpenAI } from "agentracer/openai";
+
+init({
+  trackerApiKey: process.env.AGENTRACER_API_KEY!,
+  projectId: process.env.AGENTRACER_PROJECT_ID!,
+});
+
+const openai = new TrackedOpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+  organization: "org-xxx",
+  baseURL: "https://custom-endpoint.example.com/v1",
+});
+
+const response = await openai.chat.completions.create({
+  model: "gpt-4o",
+  messages: [{ role: "user", content: "Hello!" }],
+});
+```
+
+### TrackedAnthropic
+
+```typescript
+import { init } from "agentracer";
+import { TrackedAnthropic } from "agentracer/anthropic";
+
+init({
+  trackerApiKey: process.env.AGENTRACER_API_KEY!,
+  projectId: process.env.AGENTRACER_PROJECT_ID!,
+});
+
+const anthropic = new TrackedAnthropic({
+  apiKey: process.env.ANTHROPIC_API_KEY,
+  baseURL: "https://custom-endpoint.example.com",
+});
+
+const response = await anthropic.messages.create({
+  model: "claude-sonnet-4-20250514",
+  max_tokens: 1024,
+  messages: [{ role: "user", content: "Hello!" }],
+});
 ```
 
 ## Streaming
@@ -186,7 +235,6 @@ init({
 
 const handleChat = observe(
   async (userMessage: string) => {
-    // This call is automatically tagged with "chatbot"
     const response = await openai.chat.completions.create({
       model: "gpt-4o",
       messages: [{ role: "user", content: userMessage }],
@@ -201,6 +249,68 @@ const reply = await handleChat("What is TypeScript?");
 ```
 
 `observe` uses Node.js `AsyncLocalStorage` under the hood, so it works correctly with concurrent requests -- each request gets its own tag even in parallel.
+
+## Agent Runs
+
+Track multi-step AI agent workflows as a single run with individual step tracking:
+
+```typescript
+import { init, AgentRun } from "agentracer";
+import { openai } from "agentracer/openai";
+
+init({
+  trackerApiKey: process.env.AGENTRACER_API_KEY!,
+  projectId: process.env.AGENTRACER_PROJECT_ID!,
+});
+
+const run = new AgentRun({
+  runName: "research-agent",
+  featureTag: "research",
+  endUserId: "user-123",
+});
+
+const result = await run.execute(async () => {
+  // Step 1: Plan
+  const plan = await openai.chat.completions.create({
+    model: "gpt-4o",
+    messages: [{ role: "user", content: "Plan a research strategy for quantum computing" }],
+  });
+
+  // Step 2: Execute
+  const research = await openai.chat.completions.create({
+    model: "gpt-4o",
+    messages: [
+      { role: "user", content: "Research quantum computing" },
+      { role: "assistant", content: plan.choices[0].message.content! },
+      { role: "user", content: "Now execute the research plan" },
+    ],
+  });
+
+  // Step 3: Summarize
+  const summary = await openai.chat.completions.create({
+    model: "gpt-4o-mini",
+    messages: [
+      { role: "user", content: `Summarize: ${research.choices[0].message.content}` },
+    ],
+  });
+
+  return summary.choices[0].message.content;
+});
+```
+
+Each LLM call inside `run.execute()` is automatically:
+- Tagged with the run's `featureTag`
+- Linked to the run via `runId`
+- Recorded as a numbered step with its own token/latency data
+
+### AgentRun Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `runName` | `string` | - | Human-readable name for the run |
+| `featureTag` | `string` | `"unknown"` | Feature tag applied to all calls |
+| `endUserId` | `string` | - | User ID for per-user cost tracking |
+| `runId` | `string` | auto-generated UUID | Custom run ID |
 
 ## Manual Tracking
 
@@ -227,6 +337,23 @@ await track({
   provider: "openai",
 });
 ```
+
+### track() Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `model` | `string` | required | Model name |
+| `inputTokens` | `number` | required | Tokens sent to the model |
+| `outputTokens` | `number` | required | Tokens received from the model |
+| `latencyMs` | `number` | required | Round-trip time in milliseconds |
+| `featureTag` | `string` | from context or `"unknown"` | Which feature made the call |
+| `provider` | `string` | `"custom"` | LLM provider name |
+| `cachedTokens` | `number` | `0` | Cached input tokens |
+| `success` | `boolean` | `true` | Whether the call succeeded |
+| `errorType` | `string` | - | Error class name on failure |
+| `endUserId` | `string` | - | User ID for per-user tracking |
+| `runId` | `string` | auto from AgentRun | Agent run ID |
+| `stepIndex` | `number` | auto from AgentRun | Step number within run |
 
 ## Express Example
 
@@ -343,13 +470,19 @@ Every LLM call sends a single lightweight payload:
 | Field | Description |
 |-------|-------------|
 | `project_id` | Your project identifier |
-| `provider` | LLM provider (openai, anthropic, custom) |
+| `provider` | LLM provider (openai, anthropic, gemini, custom) |
 | `model` | Model name (gpt-4o, claude-sonnet-4-20250514, etc.) |
 | `feature_tag` | Which feature made the call |
 | `input_tokens` | Tokens sent to the model |
 | `output_tokens` | Tokens received from the model |
+| `cached_tokens` | Cached input tokens (prompt cache hits) |
 | `latency_ms` | Round-trip time in milliseconds |
+| `success` | Whether the call succeeded |
+| `error_type` | Error class name (on failure) |
 | `environment` | Environment label |
+| `run_id` | Agent run ID (when inside AgentRun.execute) |
+| `step_index` | Step number within an agent run |
+| `end_user_id` | End user identifier (for per-user cost tracking) |
 
 We never log prompts, responses, or any user data. Just counts and timing.
 

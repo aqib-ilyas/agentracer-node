@@ -113,7 +113,9 @@ describe("track", () => {
       feature_tag: "chat",
       input_tokens: 100,
       output_tokens: 50,
+      cached_tokens: 0,
       latency_ms: 200,
+      success: true,
       environment: "production",
     });
   });

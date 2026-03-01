@@ -1,8 +1,12 @@
-import { getConfig, sendTelemetry, featureTagStorage } from "./index";
+import { getConfig, track, featureTagStorage } from "./index";
 
 let _clientInstance: any = null;
 
-function getClient() {
+function getClient(opts?: any) {
+  if (opts) {
+    const OpenAI = require("openai").default || require("openai");
+    return new OpenAI(opts);
+  }
   if (!_clientInstance) {
     const OpenAI = require("openai").default || require("openai");
     _clientInstance = new OpenAI();
@@ -32,62 +36,92 @@ async function* wrapOpenAIStream(
     yield chunk;
   }
 
-  sendTelemetry({
-    project_id: getConfig().projectId,
-    provider: "openai",
+  track({
     model,
-    feature_tag: featureTag,
-    input_tokens: inputTokens,
-    output_tokens: outputTokens,
-    latency_ms: Date.now() - start,
-    environment: getConfig().environment,
+    inputTokens,
+    outputTokens,
+    latencyMs: Date.now() - start,
+    featureTag,
+    provider: "openai",
   }).catch(() => {});
 }
 
-export const openai = new Proxy({} as any, {
-  get(_, prop) {
-    if (prop === "chat") {
-      return {
-        completions: {
-          create: async (params: any) => {
-            const featureTag =
-              params.feature_tag ??
-              featureTagStorage.getStore() ??
-              "unknown";
+function createOpenAIProxy(clientGetter: () => any) {
+  return new Proxy({} as any, {
+    get(_, prop) {
+      if (prop === "chat") {
+        return {
+          completions: {
+            create: async (params: any) => {
+              const featureTag =
+                params.feature_tag ??
+                featureTagStorage.getStore() ??
+                "unknown";
 
-            const { feature_tag, ...cleanParams } = params;
+              const { feature_tag, ...cleanParams } = params;
 
-            const start = Date.now();
-            const client = getClient();
+              const start = Date.now();
+              const client = clientGetter();
 
-            if (cleanParams.stream) {
-              cleanParams.stream_options = {
-                ...cleanParams.stream_options,
-                include_usage: true,
-              };
-              const stream = await client.chat.completions.create(cleanParams);
-              return wrapOpenAIStream(stream, params.model, featureTag, start);
-            }
+              if (cleanParams.stream) {
+                cleanParams.stream_options = {
+                  ...cleanParams.stream_options,
+                  include_usage: true,
+                };
+                const stream = await client.chat.completions.create(cleanParams);
+                return wrapOpenAIStream(stream, params.model, featureTag, start);
+              }
 
-            const response = await client.chat.completions.create(cleanParams);
+              let response: any;
+              try {
+                response = await client.chat.completions.create(cleanParams);
+              } catch (err: any) {
+                track({
+                  model: params.model,
+                  inputTokens: 0,
+                  outputTokens: 0,
+                  latencyMs: Date.now() - start,
+                  featureTag,
+                  provider: "openai",
+                  success: false,
+                  errorType: err?.constructor?.name ?? "Error",
+                }).catch(() => {});
+                throw err;
+              }
 
-            sendTelemetry({
-              project_id: getConfig().projectId,
-              provider: "openai",
-              model: params.model,
-              feature_tag: featureTag,
-              input_tokens: response.usage?.prompt_tokens ?? 0,
-              output_tokens: response.usage?.completion_tokens ?? 0,
-              latency_ms: Date.now() - start,
-              environment: getConfig().environment,
-            }).catch(() => {});
+              track({
+                model: params.model,
+                inputTokens: response.usage?.prompt_tokens ?? 0,
+                outputTokens: response.usage?.completion_tokens ?? 0,
+                cachedTokens: response.usage?.prompt_tokens_details?.cached_tokens ?? 0,
+                latencyMs: Date.now() - start,
+                featureTag,
+                provider: "openai",
+              }).catch(() => {});
 
-            return response;
+              return response;
+            },
           },
-        },
-      };
-    }
+        };
+      }
 
-    return getClient()[prop];
-  },
-});
+      return clientGetter()[prop];
+    },
+  });
+}
+
+export class TrackedOpenAI {
+  private _proxy: any;
+
+  constructor(options?: any) {
+    const OpenAI = require("openai").default || require("openai");
+    const client = new OpenAI(options);
+    this._proxy = createOpenAIProxy(() => client);
+  }
+
+  get chat() {
+    return this._proxy.chat;
+  }
+}
+
+export const openai = createOpenAIProxy(() => getClient());
