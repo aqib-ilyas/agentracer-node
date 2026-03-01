@@ -4,10 +4,6 @@ on:
   release:
     types: [published]
 
-permissions:
-  id-token: write
-  contents: read
-
 jobs:
   test:
     name: Run tests
@@ -33,6 +29,9 @@ jobs:
     name: Build and publish
     needs: test
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
     steps:
       - uses: actions/checkout@v4
 
